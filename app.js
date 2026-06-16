@@ -1,5 +1,5 @@
 // ===== CONFIGURACIÓN =====
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzCLSWQBuRt4_ocXu4csU9rm437fBEL_0W1yBjFFsOF6_JCUWQCuJXi6YE199ULYbaBQQ/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxLRaB1Wg9bIH_EtYguAM8Bo-6TB6xcr3mLQwjgEYmFmswvb0vlLUhTt8r-yqcn7tHaeg/exec';
 
 let CONFIG = { sheetId: '', apiKey: '' };
 let allPedidos   = [];   // todos los pedidos de "Pedidos"
