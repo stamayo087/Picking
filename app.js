@@ -1,5 +1,5 @@
 // ===== CONFIGURACIÓN =====
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyUrAB2Y4xI6wyHPXSijzE0x-EjlRtkvq735CpBMHWxBgLKjcQ9bif8rHCU-ez2RXDSVA/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwxbXrU8QVJzwCCHtkvlHOEuSuXx6i53UVe8-N90KAAqjZekO4_3HcNIsq0UNapUMZ9pQ/exec';
 
 let CONFIG = { sheetId: '', apiKey: '' };
 let allPedidos   = [];   // todos los pedidos de "Pedidos"
@@ -574,18 +574,14 @@ async function loadMediaForPedido(factura) {
   const empty = document.getElementById('mediaEmpty');
   grid.querySelectorAll('.media-thumb').forEach(el => el.remove());
 
-  // Si ya tenemos cache no volvemos a pedir
-  if (mediaCache[factura]) {
-    renderMediaGrid(factura);
-    return;
-  }
+  if (mediaCache[factura]) { renderMediaGrid(factura); return; }
 
-  // Pedir al script (GET con action=getFiles)
   try {
     const facturaSafe = factura.replace(/[^a-zA-Z0-9_\-]/g,'_');
-    const url = `${APPS_SCRIPT_URL}?action=getFiles&factura=${encodeURIComponent(facturaSafe)}`;
-    const res = await fetch(url);
-    const data = await res.json();
+    const url  = `${APPS_SCRIPT_URL}?action=getFiles&factura=${encodeURIComponent(facturaSafe)}`;
+    const res  = await fetch(url);
+    const text = await res.text();
+    const data = JSON.parse(text);
     mediaCache[factura] = data.ok ? (data.data || []) : [];
   } catch(e) {
     mediaCache[factura] = [];
@@ -630,11 +626,8 @@ async function uploadMediaFiles(e) {
   if (!files.length || !factura) return;
   e.target.value = '';
 
-  // Validar tamaños
   const tooBig = files.filter(f => f.size > 20 * 1024 * 1024);
-  if (tooBig.length) {
-    showToast(`⚠ ${tooBig.length} archivo(s) superan 20MB y serán omitidos`, 'warning');
-  }
+  if (tooBig.length) showToast(`⚠ ${tooBig.length} archivo(s) superan 20MB y serán omitidos`, 'warning');
   const valid = files.filter(f => f.size <= 20 * 1024 * 1024);
   if (!valid.length) return;
 
@@ -646,13 +639,15 @@ async function uploadMediaFiles(e) {
   for (let i = 0; i < valid.length; i++) {
     const file = valid[i];
     progText.textContent = `Subiendo ${i+1}/${valid.length}: ${file.name}`;
-    progFill.style.width = Math.round(((i) / valid.length) * 100) + '%';
+    progFill.style.width = Math.round((i / valid.length) * 100) + '%';
 
     try {
       const b64 = await fileToBase64(file);
+
+      // Usar fetch normal (no no-cors) para poder leer la respuesta
       const res = await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'text/plain' }, // text/plain evita preflight CORS en Apps Script
         body: JSON.stringify({
           action:   'uploadFile',
           factura:  factura,
@@ -661,14 +656,18 @@ async function uploadMediaFiles(e) {
           base64:   b64
         })
       });
-      const data = await res.json();
+
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch(pe) { throw new Error('Respuesta inválida del servidor'); }
+
       if (data.ok) {
         if (!mediaCache[factura]) mediaCache[factura] = [];
         mediaCache[factura].push(data.data);
         renderMediaGrid(factura);
         showToast('✓ ' + file.name + ' subido', 'success');
       } else {
-        showToast('Error: ' + data.error, 'error');
+        showToast('Error: ' + (data.error || 'desconocido'), 'error');
       }
     } catch(err) {
       showToast('Error subiendo ' + file.name + ': ' + err.message, 'error');
