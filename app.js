@@ -604,7 +604,6 @@ function fetchJsonp(url) {
 function renderMediaGrid(factura) {
   const grid  = document.getElementById('mediaGrid');
   const empty = document.getElementById('mediaEmpty');
-  // Limpiar miniaturas anteriores
   grid.querySelectorAll('.media-thumb').forEach(el => el.remove());
 
   const files = mediaCache[factura] || [];
@@ -614,16 +613,18 @@ function renderMediaGrid(factura) {
   files.forEach(f => {
     const div = document.createElement('div');
     div.className = 'media-thumb';
-    div.title = f.name;
-    div.onclick = () => openLightbox(f);
+    div.title     = f.name;
+    div.onclick   = () => openLightbox(f);
 
     const isImg = f.thumbUrl !== null;
     if (isImg) {
+      // Usar URL de thumbnail pública de Drive (no requiere auth)
+      const thumbSrc = `https://drive.google.com/thumbnail?id=${f.fileId}&sz=w200`;
       div.innerHTML = `
-        <img src="${f.thumbUrl}" alt="${escHtml(f.name)}" loading="lazy" />
+        <img src="${thumbSrc}" alt="${escHtml(f.name)}" loading="lazy"
+          onerror="this.parentElement.innerHTML='<div class=\'media-img-icon\'>🖼️</div><span class=\'media-thumb-name\'>${escHtml(f.name)}</span>'" />
         <span class="media-thumb-name">${escHtml(f.name)}</span>`;
     } else {
-      // Video — mostrar ícono
       div.innerHTML = `
         <div class="media-video-icon">▶</div>
         <span class="media-thumb-name">${escHtml(f.name)}</span>`;
@@ -736,8 +737,12 @@ function openLightbox(file) {
   link.href        = file.viewUrl;
 
   if (file.thumbUrl) {
-    // Imagen — mostrar en tamaño completo
-    content.innerHTML = `<img src="${file.thumbUrl.replace('w400','w800')}" alt="${escHtml(file.name)}" style="max-width:100%;max-height:65vh;border-radius:8px;display:block;margin:0 auto" />`;
+    // Usar thumbnail pública de Drive para preview grande
+    const bigThumb = `https://drive.google.com/thumbnail?id=${file.fileId}&sz=w800`;
+    content.innerHTML = `
+      <img src="${bigThumb}" alt="${escHtml(file.name)}"
+        style="max-width:100%;max-height:65vh;border-radius:8px;display:block;margin:0 auto"
+        onerror="this.src='https://drive.google.com/thumbnail?id=${file.fileId}&sz=w400'" />`;
   } else {
     // Video — botón para abrir en Drive (no se puede embeber directamente)
     content.innerHTML = `
