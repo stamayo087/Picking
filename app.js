@@ -1,5 +1,5 @@
 // ===== CONFIGURACIÓN =====
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwxbXrU8QVJzwCCHtkvlHOEuSuXx6i53UVe8-N90KAAqjZekO4_3HcNIsq0UNapUMZ9pQ/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzltb7LacbX9Eu0QV2ynqGH2l5hZbsTss86BQOoLRm5ZUwhdAdLpjKMHoe7c5AZ7JvR2g/exec';
 
 let CONFIG = { sheetId: '', apiKey: '' };
 let allPedidos   = [];   // todos los pedidos de "Pedidos"
@@ -570,23 +570,35 @@ function printSticker() {
 let mediaCache = {}; // { factura: [ {fileId, name, mimeType, viewUrl, thumbUrl}, ... ] }
 
 async function loadMediaForPedido(factura) {
-  const grid  = document.getElementById('mediaGrid');
-  const empty = document.getElementById('mediaEmpty');
-  grid.querySelectorAll('.media-thumb').forEach(el => el.remove());
-
+  document.getElementById('mediaGrid').querySelectorAll('.media-thumb').forEach(el => el.remove());
   if (mediaCache[factura]) { renderMediaGrid(factura); return; }
-
   try {
     const facturaSafe = factura.replace(/[^a-zA-Z0-9_\-]/g,'_');
-    const url  = `${APPS_SCRIPT_URL}?action=getFiles&factura=${encodeURIComponent(facturaSafe)}`;
-    const res  = await fetch(url);
-    const text = await res.text();
-    const data = JSON.parse(text);
+    const data = await fetchJsonp(
+      `${APPS_SCRIPT_URL}?action=getFiles&factura=${encodeURIComponent(facturaSafe)}`
+    );
     mediaCache[factura] = data.ok ? (data.data || []) : [];
   } catch(e) {
     mediaCache[factura] = [];
   }
   renderMediaGrid(factura);
+}
+
+// JSONP — GET sin CORS desde móvil a Apps Script
+function fetchJsonp(url) {
+  return new Promise((resolve) => {
+    const cbName = 'jsonp_cb_' + Date.now();
+    const script = document.createElement('script');
+    const timeout = setTimeout(() => { cleanup(); resolve({ok:false,data:[]}); }, 10000);
+    window[cbName] = (data) => { clearTimeout(timeout); cleanup(); resolve(data); };
+    script.src     = url + '&callback=' + cbName;
+    script.onerror = () => { clearTimeout(timeout); cleanup(); resolve({ok:false,data:[]}); };
+    document.head.appendChild(script);
+    function cleanup() {
+      try { document.head.removeChild(script); } catch(e){}
+      delete window[cbName];
+    }
+  });
 }
 
 function renderMediaGrid(factura) {
@@ -627,7 +639,7 @@ async function uploadMediaFiles(e) {
   e.target.value = '';
 
   const tooBig = files.filter(f => f.size > 20 * 1024 * 1024);
-  if (tooBig.length) showToast(`⚠ ${tooBig.length} archivo(s) superan 20MB y serán omitidos`, 'warning');
+  if (tooBig.length) showToast(`⚠ ${tooBig.length} archivo(s) superan 20MB`, 'warning');
   const valid = files.filter(f => f.size <= 20 * 1024 * 1024);
   if (!valid.length) return;
 
@@ -640,43 +652,68 @@ async function uploadMediaFiles(e) {
     const file = valid[i];
     progText.textContent = `Subiendo ${i+1}/${valid.length}: ${file.name}`;
     progFill.style.width = Math.round((i / valid.length) * 100) + '%';
-
     try {
-      const b64 = await fileToBase64(file);
-
-      // Usar fetch normal (no no-cors) para poder leer la respuesta
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' }, // text/plain evita preflight CORS en Apps Script
-        body: JSON.stringify({
-          action:   'uploadFile',
-          factura:  factura,
-          fileName: file.name,
-          mimeType: file.type,
-          base64:   b64
-        })
-      });
-
-      const text = await res.text();
-      let data;
-      try { data = JSON.parse(text); } catch(pe) { throw new Error('Respuesta inválida del servidor'); }
-
-      if (data.ok) {
-        if (!mediaCache[factura]) mediaCache[factura] = [];
-        mediaCache[factura].push(data.data);
-        renderMediaGrid(factura);
-        showToast('✓ ' + file.name + ' subido', 'success');
-      } else {
-        showToast('Error: ' + (data.error || 'desconocido'), 'error');
-      }
+      await uploadViaIframe(file, factura);
+      showToast('✓ ' + file.name + ' subido — cargando...', 'success');
     } catch(err) {
-      showToast('Error subiendo ' + file.name + ': ' + err.message, 'error');
+      showToast('Error: ' + err.message, 'error');
     }
   }
 
   progFill.style.width = '100%';
-  progText.textContent = '¡Listo!';
-  setTimeout(() => prog.classList.add('hidden'), 1500);
+  progText.textContent = 'Procesando en Drive...';
+  // Esperar 5s para que Drive indexe el archivo y luego recargar
+  await new Promise(r => setTimeout(r, 5000));
+  delete mediaCache[factura];
+  await loadMediaForPedido(factura);
+  prog.classList.add('hidden');
+}
+
+function uploadViaIframe(file, factura) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Error leyendo archivo'));
+    reader.onload  = (ev) => {
+      const b64 = ev.target.result.split(',')[1];
+      const iframeName = 'upload_frame_' + Date.now();
+      const iframe = document.createElement('iframe');
+      iframe.name  = iframeName;
+      iframe.style.display = 'none';
+      document.body.appendChild(iframe);
+
+      const form = document.createElement('form');
+      form.method  = 'POST';
+      form.action  = APPS_SCRIPT_URL;
+      form.target  = iframeName;
+
+      const addField = (name, value) => {
+        const inp = document.createElement('input');
+        inp.type  = 'hidden';
+        inp.name  = name;
+        inp.value = value;
+        form.appendChild(inp);
+      };
+
+      // Apps Script recibirá e.parameter.* para cada campo
+      addField('action',   'uploadFile');
+      addField('factura',  factura);
+      addField('fileName', file.name);
+      addField('mimeType', file.type);
+      addField('base64',   b64);
+
+      document.body.appendChild(form);
+
+      const timeout = setTimeout(() => { cleanup(); resolve(); }, 35000);
+      iframe.onload = () => { clearTimeout(timeout); cleanup(); resolve(); };
+      form.submit();
+
+      function cleanup() {
+        try { document.body.removeChild(form); } catch(e){}
+        setTimeout(() => { try { document.body.removeChild(iframe); } catch(e){} }, 500);
+      }
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function fileToBase64(file) {
